@@ -3,9 +3,11 @@ import numpy as np
 import itertools
 import collections
 import torch
+import json
 from .example import Example
 from .utils import nostdout
 from pycocotools.coco import COCO as pyCOCO
+
 
 
 class Dataset(object):
@@ -178,37 +180,37 @@ class PairedDataset(Dataset):
         raise NotImplementedError
 
 
-class COCO(PairedDataset):
+class OpenViVQA(PairedDataset):
     def __init__(self, image_field, text_field, img_root, ann_root, id_root=None, use_restval=True,
                  cut_validation=False):
         roots = {}
         roots['train'] = {
             'img': os.path.join(img_root, 'train2014'),
-            'cap': os.path.join(ann_root, 'captions_train2014.json')
+            'ann': os.path.join(ann_root, 'train.json')
         }
         roots['val'] = {
             'img': os.path.join(img_root, 'val2014'),
-            'cap': os.path.join(ann_root, 'captions_val2014.json')
+            'ann': os.path.join(ann_root, 'val.json')
         }
         roots['test'] = {
-            'img': os.path.join(img_root, 'val2014'),
-            'cap': os.path.join(ann_root, 'captions_val2014.json')
+            'img': os.path.join(img_root, 'test2014'),
+            'ann': os.path.join(ann_root, 'test.json')
         }
         roots['trainrestval'] = {
             'img': (roots['train']['img'], roots['val']['img']),
-            'cap': (roots['train']['cap'], roots['val']['cap'])
+            'ann': (roots['train']['ann'], roots['val']['ann'])
         }
 
         if id_root is not None:
             ids = {}
-            ids['train'] = np.load(os.path.join(id_root, 'coco_train_ids.npy'))
-            ids['val'] = np.load(os.path.join(id_root, 'coco_dev_ids.npy'))
+            ids['train'] = np.load(os.path.join(id_root, 'vivqa_train_ids.npy'))
+            ids['val'] = np.load(os.path.join(id_root, 'vivqa_dev_ids.npy'))
             if cut_validation:
                 ids['val'] = ids['val'][:5000]
-            ids['test'] = np.load(os.path.join(id_root, 'coco_test_ids.npy'))
+            ids['test'] = np.load(os.path.join(id_root, 'vivqa_test_ids.npy'))
             ids['trainrestval'] = (
                 ids['train'],
-                np.load(os.path.join(id_root, 'coco_restval_ids.npy')))
+                np.load(os.path.join(id_root, 'vivqa_restval_ids.npy')))
 
             if use_restval:
                 roots['train'] = roots['trainrestval']
@@ -219,7 +221,7 @@ class COCO(PairedDataset):
         with nostdout():
             self.train_examples, self.val_examples, self.test_examples = self.get_samples(roots, ids)
         examples = self.train_examples + self.val_examples + self.test_examples
-        super(COCO, self).__init__(examples, {'image': image_field, 'text': text_field})
+        super(OpenViVQA, self).__init__(examples, {'image': image_field, 'text': text_field})
 
     @property
     def splits(self):
@@ -235,15 +237,15 @@ class COCO(PairedDataset):
         test_samples = []
 
         for split in ['train', 'val', 'test']:
-            if isinstance(roots[split]['cap'], tuple):
-                coco_dataset = (pyCOCO(roots[split]['cap'][0]), pyCOCO(roots[split]['cap'][1]))
+            if isinstance(roots[split]['ann'], tuple):
+                vivqa_datasets = (cls.load_vivqa(roots[split]['ann'][0]), cls.load_vivqa(roots[split]['ann'][1]))
                 root = roots[split]['img']
             else:
-                coco_dataset = (pyCOCO(roots[split]['cap']),)
+                vivqa_datasets = (cls.load_vivqa(roots[split]['ann']),)
                 root = (roots[split]['img'],)
 
             if ids_dataset is None:
-                ids = list(coco_dataset.anns.keys())
+                ids = list(vivqa_datasets[0].keys())
             else:
                 ids = ids_dataset[split]
 
@@ -255,18 +257,19 @@ class COCO(PairedDataset):
 
             for index in range(len(ids)):
                 if index < bp:
-                    coco = coco_dataset[0]
+                    vivqa = vivqa_datasets[0]
                     img_root = root[0]
                 else:
-                    coco = coco_dataset[1]
+                    vivqa = vivqa_datasets[1]
                     img_root = root[1]
 
-                ann_id = ids[index]
-                caption = coco.anns[ann_id]['caption']
-                img_id = coco.anns[ann_id]['image_id']
-                filename = coco.loadImgs(img_id)[0]['file_name']
+                ann_id = str(ids[index])
+                question = vivqa[ann_id]['question']
+                answer = vivqa[ann_id]['answer']
+                img_id = vivqa[ann_id]['image_id']
+                filename = f"{img_id}.jpg"
 
-                example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': caption})
+                example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': f"Q: {question} A: {answer}"})
 
                 if split == 'train':
                     train_samples.append(example)
@@ -277,3 +280,8 @@ class COCO(PairedDataset):
 
         return train_samples, val_samples, test_samples
 
+    @staticmethod
+    def load_vivqa(ann_path):
+        with open(ann_path, 'r') as f:
+            data = json.load(f)
+        return data
