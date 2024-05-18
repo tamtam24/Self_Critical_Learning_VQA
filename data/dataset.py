@@ -254,7 +254,7 @@ class OpenViVQA(PairedDataset):
         
         examples = train_examples + dev_examples + test_examples
         
-        fields = {'image': image_field(), 'question': question_field(), 'answer': answer_field()}
+        fields = {'image': image_field, 'question': question_field, 'answer': answer_field}
         super(OpenViVQA, self).__init__(examples, fields)
         
         # return df_train,df_dev,df_test
