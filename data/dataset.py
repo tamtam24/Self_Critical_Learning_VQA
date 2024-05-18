@@ -4,9 +4,12 @@ import itertools
 import collections
 import torch
 import json
+import csv
+import pandas as pd
 from .example import Example
 from .utils import nostdout
-from pycocotools.coco import COCO as pyCOCO
+from underthesea import word_tokenize, text_normalize
+# from pycocotools.coco import COCO as pyCOCO
 
 
 
@@ -180,105 +183,150 @@ class PairedDataset(Dataset):
         raise NotImplementedError
 
 
+def convert_json_to_csv(input_file, folder_path,output_file):
+    with open(input_file, 'r', encoding='utf-8') as json_file:
+        data = json.load(json_file)
+
+    rows = [["Anno ID", "Image ID", "Image Path", "Question", "Answer"]]
+
+    for anno_id, annotation in data["annotations"].items():
+        image_id = annotation["image_id"]
+        question = annotation["question"]
+        answer = annotation["answer"]
+        image_name = data["images"].get(str(image_id), "")
+        image_path = f"{folder_path}/{image_name}"
+        rows.append([anno_id, image_id, image_path, question, answer])
+
+    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+def segment_text(text):
+    result = word_tokenize(text)
+    return result
+
+
 class OpenViVQA(PairedDataset):
-    def __init__(self, image_field, text_field, img_root, ann_root, id_root=None, use_restval=True,
-                 cut_validation=False):
-        roots = {}
-        roots['train'] = {
-            'img': os.path.join(img_root, 'train2014'),
-            'ann': os.path.join(ann_root, 'train.json')
-        }
-        roots['val'] = {
-            'img': os.path.join(img_root, 'val2014'),
-            'ann': os.path.join(ann_root, 'val.json')
-        }
-        roots['test'] = {
-            'img': os.path.join(img_root, 'test2014'),
-            'ann': os.path.join(ann_root, 'test.json')
-        }
-        roots['trainrestval'] = {
-            'img': (roots['train']['img'], roots['val']['img']),
-            'ann': (roots['train']['ann'], roots['val']['ann'])
-        }
+    def __init__(self, img_root, ann_root, id_root=None):
+        
+        #path cac file trong dataset
+        img_train_path = os.path.join(img_root,'training-images')
+        json_train_path = os.path.join(ann_root,'training-annotations.json')
+        img_test_path = os.path.join(img_root,'test-images')
+        json_test_path = os.path.join(ann_root,'test-annotations.json')
+        img_dev_path = os.path.join(img_root,'dev-images')
+        json_dev_path = os.path.join(ann_root,'dev-annotations.json')
+        train_csv = 'train.csv'
+        test_csv = 'test.csv'
+        dev_csv = 'dev.csv'
+        
+        #convert qua file csv tu json
+        convert_json_to_csv(img_train_path,json_train_path,train_csv)
+        convert_json_to_csv(img_test_path,json_test_path,test_csv)
+        convert_json_to_csv(img_dev_path,json_dev_path,dev_csv)
+        
+        #gan cac file csv
+        df_train = pd.read_csv('train.csv')
+        df_test = pd.read_csv('test.csv')
+        df_dev = pd.read_csv('dev.csv')
+        
+        
+        #word_tokenize
+        #ap dung tokenize cho dataset
+        df_train['Question'] = [word_tokenize(text_normalize(x), format='text') for x in df_train['Question']]
+        df_train['Answer'] = [word_tokenize(text_normalize(str(x)), format='text') for x in df_train['Answer']]
 
-        if id_root is not None:
-            ids = {}
-            ids['train'] = np.load(os.path.join(id_root, 'vivqa_train_ids.npy'))
-            ids['val'] = np.load(os.path.join(id_root, 'vivqa_dev_ids.npy'))
-            if cut_validation:
-                ids['val'] = ids['val'][:5000]
-            ids['test'] = np.load(os.path.join(id_root, 'vivqa_test_ids.npy'))
-            ids['trainrestval'] = (
-                ids['train'],
-                np.load(os.path.join(id_root, 'vivqa_restval_ids.npy')))
+        df_dev['Question'] = [word_tokenize(text_normalize(x), format='text') for x in df_dev['Question']]
+        df_dev['Answer'] = [word_tokenize(text_normalize(str(x)), format='text') for x in df_dev['Answer']]
+        
+        return df_train,df_dev,df_test
+    
+    
+    
+        # roots = {}
+        # roots['train'] = {
+        #     'img': os.path.join(img_root, 'train2014'),
+        #     'ann': os.path.join(ann_root, 'vlsp2023_train_data.json')
+        # }
+        # roots['val'] = {
+        #     'img': os.path.join(img_root, 'val2014'),
+        #     'ann': os.path.join(ann_root, 'vlsp2023_dev_data.json')
+        # }
+        # roots['test'] = {
+        #     'img': os.path.join(img_root, 'test2014'),
+        #     'ann': os.path.join(ann_root, 'vlsp2023_test_data.json')
+        # }
 
-            if use_restval:
-                roots['train'] = roots['trainrestval']
-                ids['train'] = ids['trainrestval']
-        else:
-            ids = None
+        # if id_root is not None:
+        #     ids = {}
+        #     ids['train'] = np.load(os.path.join(id_root, 'vivqa_train_ids.npy'))
+        #     ids['val'] = np.load(os.path.join(id_root, 'vivqa_dev_ids.npy'))
+        #     ids['test'] = np.load(os.path.join(id_root, 'vivqa_test_ids.npy'))
+        # else:
+        #     ids = None
 
-        with nostdout():
-            self.train_examples, self.val_examples, self.test_examples = self.get_samples(roots, ids)
-        examples = self.train_examples + self.val_examples + self.test_examples
-        super(OpenViVQA, self).__init__(examples, {'image': image_field, 'text': text_field})
+        # self.image_field = image_field
+        # self.question_field = question_field
+        # self.answer_field = answer_field
+        # self.train_examples, self.val_examples, self.test_examples = self.get_samples(roots, ids)
+        # examples = self.train_examples + self.val_examples + self.test_examples
+        # super(OpenViVQA, self).__init__(examples, {'image': image_field, 'question': question_field, 'answer': answer_field})
 
-    @property
-    def splits(self):
-        train_split = PairedDataset(self.train_examples, self.fields)
-        val_split = PairedDataset(self.val_examples, self.fields)
-        test_split = PairedDataset(self.test_examples, self.fields)
-        return train_split, val_split, test_split
+    # @property
+    # def splits(self):
+    #     train_split = PairedDataset(self.train_examples, self.fields)
+    #     val_split = PairedDataset(self.val_examples, self.fields)
+    #     test_split = PairedDataset(self.test_examples, self.fields)
+    #     return train_split, val_split, test_split
 
-    @classmethod
-    def get_samples(cls, roots, ids_dataset=None):
-        train_samples = []
-        val_samples = []
-        test_samples = []
+    # @classmethod
+    # def get_samples(cls, roots, ids_dataset=None):
+    #     train_samples = []
+    #     val_samples = []
+    #     test_samples = []
 
-        for split in ['train', 'val', 'test']:
-            if isinstance(roots[split]['ann'], tuple):
-                vivqa_datasets = (cls.load_vivqa(roots[split]['ann'][0]), cls.load_vivqa(roots[split]['ann'][1]))
-                root = roots[split]['img']
-            else:
-                vivqa_datasets = (cls.load_vivqa(roots[split]['ann']),)
-                root = (roots[split]['img'],)
+    #     for split in ['train', 'val', 'test']:
+    #         if isinstance(roots[split]['ann'], tuple):
+    #             vivqa_datasets = (cls.load_vivqa(roots[split]['ann'][0]), cls.load_vivqa(roots[split]['ann'][1]))
+    #             root = roots[split]['img']
+    #         else:
+    #             vivqa_datasets = (cls.load_vivqa(roots[split]['ann']),)
+    #             root = (roots[split]['img'],)
 
-            if ids_dataset is None:
-                ids = list(vivqa_datasets[0].keys())
-            else:
-                ids = ids_dataset[split]
+    #         if ids_dataset is None:
+    #             ids = list(vivqa_datasets[0].keys())
+    #         else:
+    #             ids = ids_dataset[split]
 
-            if isinstance(ids, tuple):
-                bp = len(ids[0])
-                ids = list(ids[0]) + list(ids[1])
-            else:
-                bp = len(ids)
+    #         if isinstance(ids, tuple):
+    #             bp = len(ids[0])
+    #             ids = list(ids[0]) + list(ids[1])
+    #         else:
+    #             bp = len(ids)
 
-            for index in range(len(ids)):
-                if index < bp:
-                    vivqa = vivqa_datasets[0]
-                    img_root = root[0]
-                else:
-                    vivqa = vivqa_datasets[1]
-                    img_root = root[1]
+    #         for index in range(len(ids)):
+    #             if index < bp:
+    #                 vivqa = vivqa_datasets[0]
+    #                 img_root = root[0]
+    #             else:
+    #                 vivqa = vivqa_datasets[1]
+    #                 img_root = root[1]
 
-                ann_id = str(ids[index])
-                question = vivqa[ann_id]['question']
-                answer = vivqa[ann_id]['answer']
-                img_id = vivqa[ann_id]['image_id']
-                filename = f"{img_id}.jpg"
+    #             ann_id = str(ids[index])
+    #             question = vivqa[ann_id]['question']
+    #             answer = vivqa[ann_id]['answer']
+    #             img_id = vivqa[ann_id]['image_id']
+    #             filename = f"{img_id}.jpg"
 
-                example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': f"Q: {question} A: {answer}"})
+    #             example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': f"Q: {question} A: {answer}"})
 
-                if split == 'train':
-                    train_samples.append(example)
-                elif split == 'val':
-                    val_samples.append(example)
-                elif split == 'test':
-                    test_samples.append(example)
+    #             if split == 'train':
+    #                 train_samples.append(example)
+    #             elif split == 'val':
+    #                 val_samples.append(example)
+    #             elif split == 'test':
+    #                 test_samples.append(example)
 
-        return train_samples, val_samples, test_samples
+        
 
     @staticmethod
     def load_vivqa(ann_path):

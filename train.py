@@ -14,6 +14,7 @@ import argparse, os, pickle
 import numpy as np
 import itertools
 import multiprocessing
+from data.dataset import OpenViVQA
 from shutil import copyfile
 
 random.seed(1234)
@@ -158,30 +159,31 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir=os.path.join(args.logs_folder, args.exp_name))
 
     # Pipeline for image regions
-    image_field = ImageDetectionsField(detections_path=args.features_path, max_detections=50, load_in_tmp=False)
+    # image_field = ImageDetectionsField(detections_path=args.features_path, max_detections=50, load_in_tmp=False)
 
-    # Pipeline for text
-    text_field = TextField(init_token='<bos>', eos_token='<eos>', lower=True, tokenize='spacy',
-                           remove_punctuation=True, nopoints=False)
+    # # Pipeline for text
+    # text_field = TextField(init_token='<bos>', eos_token='<eos>', lower=True, tokenize='spacy',
+    #                        remove_punctuation=True, nopoints=False)
 
     # Create the dataset
-    dataset = COCO(image_field, text_field, 'coco/images/', args.annotation_folder, args.annotation_folder)
+    dataset = OpenViVQA('path to image folder', "path to annotation folder")
     train_dataset, val_dataset, test_dataset = dataset.splits
 
-    if not os.path.isfile('vocab_%s.pkl' % args.exp_name):
-        print("Building vocabulary")
-        text_field.build_vocab(train_dataset, val_dataset, min_freq=5)
-        pickle.dump(text_field.vocab, open('vocab_%s.pkl' % args.exp_name, 'wb'))
-    else:
-        text_field.vocab = pickle.load(open('vocab_%s.pkl' % args.exp_name, 'rb'))
+    # if not os.path.isfile('vocab_%s.pkl' % args.exp_name):
+    #     print("Building vocabulary")
+    #     text_field.build_vocab(train_dataset, val_dataset, min_freq=5)
+    #     pickle.dump(text_field.vocab, open('vocab_%s.pkl' % args.exp_name, 'wb'))
+    # else:
+    #     text_field.vocab = pickle.load(open('vocab_%s.pkl' % args.exp_name, 'rb'))
 
     # Model and dataloaders
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory,
                                      attention_module_kwargs={'m': args.m})
-    decoder = MeshedDecoder(len(text_field.vocab), 54, 3, text_field.vocab.stoi['<pad>'])
+    decoder = MeshedDecoder(64001, 54, 3, text_field.vocab.stoi['<pad>'])
     model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder).to(device)
-
-    dict_dataset_train = train_dataset.image_dictionary({'image': image_field, 'text': RawField()})
+    
+    
+    # dict_dataset_train = train_dataset.image_dictionary({'image': image_field, 'text': RawField()})
     ref_caps_train = list(train_dataset.text)
     cider_train = Cider(PTBTokenizer.tokenize(ref_caps_train))
     dict_dataset_val = val_dataset.image_dictionary({'image': image_field, 'text': RawField()})
