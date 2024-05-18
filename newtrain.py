@@ -15,7 +15,7 @@ import numpy as np
 import itertools
 import multiprocessing
 from shutil import copyfile
-
+from data.dataset import OpenViVQA
 random.seed(1234)
 torch.manual_seed(1234)
 np.random.seed(1234)
@@ -116,7 +116,7 @@ if __name__ == '__main__':
     answer_field = TextField(init_token='<bos>', eos_token='<eos>', lower=True, tokenize='spacy')
 
     # Dataset and Dataloader
-    dataset = COCO_VQA(image_field, question_field, answer_field, 'path/to/annotations', 'path/to/images')
+    dataset = OpenViVQA(image_field, question_field, answer_field, 'path/to/annotations', 'path/to/images')
     dataloader_train, dataloader_val = DataLoader(dataset, batch_size=32, shuffle=True), DataLoader(dataset, batch_size=32)
 
     # Model
