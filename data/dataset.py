@@ -248,9 +248,9 @@ class OpenViVQA(PairedDataset):
         df_dev['Answer'] = [word_tokenize(text_normalize(str(x)), format='text') for x in df_dev['Answer']]
         
         #example data
-        train_examples = self.create_examples(df_train, img_train_path)
-        dev_examples = self.create_examples(df_dev, img_dev_path)
-        test_examples = self.create_examples(df_test, img_test_path)
+        train_examples = self.create_examples(df_train)
+        dev_examples = self.create_examples(df_dev)
+        test_examples = self.create_examples(df_test)
         
         examples = train_examples + dev_examples + test_examples
         
@@ -268,11 +268,11 @@ class OpenViVQA(PairedDataset):
         return train_split, val_split, test_split
 
     @classmethod
-    def create_examples(cls, df, img_path):
+    def create_examples(cls, df):
         examples = []
-        for img, question, answer in zip(df['Image ID'], df['Question'], df['Answer']):
+        for img, question, answer in zip(df['Image Path'], df['Question'], df['Answer']):
             example = Example.fromdict({
-                'image': os.path.join(img_path, img),
+                'image': img,
                 'question': question,
                 'answer': answer
             })
