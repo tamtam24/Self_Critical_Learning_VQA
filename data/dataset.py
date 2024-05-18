@@ -9,6 +9,7 @@ import pandas as pd
 from .example import Example
 from .utils import nostdout
 from underthesea import word_tokenize, text_normalize
+from collections import defaultdict
 # from pycocotools.coco import COCO as pyCOCO
 
 
@@ -146,24 +147,26 @@ def unique(sequence):
 
 class PairedDataset(Dataset):
     def __init__(self, examples, fields):
-        assert ('image' in fields)
-        assert ('text' in fields)
+        assert 'image' in fields
+        assert 'question' in fields
+        assert 'answer' in fields
         super(PairedDataset, self).__init__(examples, fields)
         self.image_field = self.fields['image']
-        self.text_field = self.fields['text']
+        self.question_field = self.fields['question']
+        self.answer_field = self.fields['answer']
 
-    def image_set(self):
-        img_list = [e.image for e in self.examples]
-        image_set = unique(img_list)
-        examples = [Example.fromdict({'image': i}) for i in image_set]
-        dataset = Dataset(examples, {'image': self.image_field})
+    def question_set(self):
+        question_list = [e.question for e in self.examples]
+        question_list = unique(question_list)
+        examples = [Example.fromdict({'question': q}) for q in question_list]
+        dataset = Dataset(examples, {'question': self.question_field})
         return dataset
 
-    def text_set(self):
-        text_list = [e.text for e in self.examples]
-        text_list = unique(text_list)
-        examples = [Example.fromdict({'text': t}) for t in text_list]
-        dataset = Dataset(examples, {'text': self.text_field})
+    def answer_set(self):
+        answer_list = [e.answer for e in self.examples]
+        answer_list = unique(answer_list)
+        examples = [Example.fromdict({'answer': a}) for a in answer_list]
+        dataset = Dataset(examples, {'answer': self.answer_field})
         return dataset
 
     def image_dictionary(self, fields=None):
@@ -172,10 +175,16 @@ class PairedDataset(Dataset):
         dataset = DictionaryDataset(self.examples, fields, key_fields='image')
         return dataset
 
-    def text_dictionary(self, fields=None):
+    def question_dictionary(self, fields=None):
         if not fields:
             fields = self.fields
-        dataset = DictionaryDataset(self.examples, fields, key_fields='text')
+        dataset = DictionaryDataset(self.examples, fields, key_fields='question')
+        return dataset
+
+    def answer_dictionary(self, fields=None):
+        if not fields:
+            fields = self.fields
+        dataset = DictionaryDataset(self.examples, fields, key_fields='answer')
         return dataset
 
     @property
@@ -206,7 +215,7 @@ def segment_text(text):
 
 
 class OpenViVQA(PairedDataset):
-    def __init__(self, img_root, ann_root, id_root=None):
+    def __init__(self,image_field, question_field, answer_field, img_root, ann_root, id_root=None):
         
         #path cac file trong dataset
         img_train_path = os.path.join(img_root,'training-images')
@@ -238,10 +247,37 @@ class OpenViVQA(PairedDataset):
         df_dev['Question'] = [word_tokenize(text_normalize(x), format='text') for x in df_dev['Question']]
         df_dev['Answer'] = [word_tokenize(text_normalize(str(x)), format='text') for x in df_dev['Answer']]
         
-        return df_train,df_dev,df_test
+        #example data
+        train_examples = self.create_examples(df_train, img_train_path)
+        dev_examples = self.create_examples(df_dev, img_dev_path)
+        test_examples = self.create_examples(df_test, img_test_path)
+        
+        examples = train_examples + dev_examples + test_examples
+        
+        fields = {'image': image_field(), 'question': question_field(), 'answer': answer_field()}
+        super(OpenViVQA, self).__init__(examples, fields)
+        
+        # return df_train,df_dev,df_test
     
     
-    
+    @property
+    def splits(self):
+        train_split = PairedDataset(self.train_examples, self.fields)
+        val_split = PairedDataset(self.val_examples, self.fields)
+        test_split = PairedDataset(self.test_examples, self.fields)
+        return train_split, val_split, test_split
+
+    @classmethod
+    def create_examples(cls, df, img_path):
+        examples = []
+        for img, question, answer in zip(df['Image ID'], df['Question'], df['Answer']):
+            example = Example.fromdict({
+                'image': os.path.join(img_path, img),
+                'question': question,
+                'answer': answer
+            })
+            examples.append(example)
+        return examples
         # roots = {}
         # roots['train'] = {
         #     'img': os.path.join(img_root, 'train2014'),
@@ -325,11 +361,3 @@ class OpenViVQA(PairedDataset):
     #                 val_samples.append(example)
     #             elif split == 'test':
     #                 test_samples.append(example)
-
-        
-
-    @staticmethod
-    def load_vivqa(ann_path):
-        with open(ann_path, 'r') as f:
-            data = json.load(f)
-        return data
