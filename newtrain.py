@@ -117,7 +117,8 @@ if __name__ == '__main__':
 
     # Dataset and Dataloader
     dataset = OpenViVQA(image_field, question_field, answer_field, 'path/to/annotations', 'path/to/images')
-    dataloader_train, dataloader_val = DataLoader(dataset, batch_size=32, shuffle=True), DataLoader(dataset, batch_size=32)
+    train_dataset, val_dataset, test_dataset = dataset.splits
+    
 
     # Model
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory, attention_module_kwargs={'m': 40})
@@ -132,7 +133,22 @@ if __name__ == '__main__':
     # Cider and tokenizer for SCST
     cider = Cider()
     tokenizer = PTBTokenizer()
+    
+    dict_dataset_train = train_dataset.image_dictionary({'image': image_field, 'text': RawField()})
+    dict_dataset_val = val_dataset.image_dictionary(({'image': image_field, 'text': RawField()}))
+    dict_dataset_test = test_dataset.image_dictionary(({'image': image_field, 'text': RawField()}))
+    
+    dataloader_train = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    dict_dataloader_train = DataLoader(dict_dataset_train, batch_size=args.batch_size // 5, shuffle=True,
+                                           num_workers=args.workers) 
+    
+    dataloader_val = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    dict_dataloader_val = DataLoader(dict_dataset_val, batch_size=args.batch_size // 5) 
+    
+    
+    dict_dataloader_test = DataLoader(dict_dataset_test, batch_size=args.batch_size // 5)
 
+    
     # Training loop
     for e in range(20):
         model.train()
