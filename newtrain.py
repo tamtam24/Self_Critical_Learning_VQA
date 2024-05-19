@@ -1,9 +1,9 @@
 import random
 from data import ImageDetectionsField, TextField, RawField
-from data import COCO_VQA, DataLoader  # Assuming COCO_VQA is a modified dataset class for VQA
+from data import DataLoader  # Assuming COCO_VQA is a modified dataset class for VQA
 import evaluation
 from evaluation import PTBTokenizer, Cider
-from models.transformer import Transformer, MemoryAugmentedEncoder, MeshedDecoder, ScaledDotProductAttentionMemory  
+from models.transformer import Transformer, MemoryAugmentedEncoder, MeshedDecoder, ScaledDotProductAttentionMemory
 import torch
 from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
@@ -15,10 +15,12 @@ import numpy as np
 import itertools
 import multiprocessing
 from shutil import copyfile
+from data.dataset import OpenViVQA, Example
 
 random.seed(1234)
 torch.manual_seed(1234)
 np.random.seed(1234)
+
 
 def evaluate_loss(model, dataloader, loss_fn, text_field):
     # Validation loss
@@ -38,6 +40,7 @@ def evaluate_loss(model, dataloader, loss_fn, text_field):
     val_loss = running_loss / len(dataloader)
     return val_loss
 
+
 def evaluate_metrics(model, dataloader, text_field):
     model.eval()
     gen = {}
@@ -51,80 +54,70 @@ def evaluate_metrics(model, dataloader, text_field):
             gts[it] = answers_gt.cpu().numpy().tolist()
             pbar.update()
 
-    # Assuming we have a function `vqa_accuracy` to calculate accuracy for VQA
-    accuracy = vqa_accuracy(gen, gts)
-    return accuracy
+    # Compute metrics using the evaluation module
+    gts = evaluation.PTBTokenizer.tokenize(gts)
+    gen = evaluation.PTBTokenizer.tokenize(gen)
+    cider = evaluation.Cider()
+    score, _ = cider.compute_score(gts, gen)
+    return score
 
-def vqa_accuracy(preds, gts):
-    correct = 0
-    total = 0
-    for pred, gt in zip(preds.values(), gts.values()):
-        if pred == gt:
-            correct += 1
-        total += 1
-    return correct / total
 
 def scst_train_step(model, data, optimizer, cider, tokenizer, vocab):
     model.train()
-    detections, questions, answers = data
-    detections, questions, answers = detections.to(device), questions.to(device), answers.to(device)
+    images, questions, answers = data
+    images, questions, answers = images.to(device), questions.to(device), answers.to(device)
 
-    # Generate baseline sequence (greedy decoding)
-    with torch.no_grad():
-        baseline_out, _ = model.beam_search(detections, questions, 20, vocab.stoi['<eos>'], 5, out_size=1)
-        baseline_out = baseline_out[:, 0]
-
-    # Generate sampled sequence (sampling decoding)
-    sampled_out, log_probs = model.sample(detections, questions, 20, vocab.stoi['<eos>'], 5)
-    
-    # Compute rewards
-    baseline_captions = tokenizer.decode(baseline_out, skip_special_tokens=True)
-    sampled_captions = tokenizer.decode(sampled_out, skip_special_tokens=True)
-    rewards = cider.compute_score({0: baseline_captions}, {0: sampled_captions})
-
-    # Compute SCST loss
-    scst_loss = -torch.mean((rewards - torch.mean(rewards)) * log_probs)
-
-    # Backpropagation
     optimizer.zero_grad()
-    scst_loss.backward()
+    out = model(images, questions)
+    loss = cider.compute_loss(out, answers)
+    loss.backward()
     optimizer.step()
+    return loss.item()
 
-    return scst_loss.item()
 
-def save_checkpoint(model, optimizer, epoch, loss, accuracy, path='checkpoint.pth'):
-    state = {
+def save_checkpoint(model, optimizer, epoch, val_loss, accuracy, path):
+    torch.save({
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss,
-        'accuracy': accuracy
-    }
-    torch.save(state, path)
-    print(f'Model saved to {path}')
+        'val_loss': val_loss,
+        'accuracy': accuracy,
+    }, path)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--resume_last', action='store_true')
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--data_root', type=str, default='data')
+    parser.add_argument('--img_root', type=str, default='data/images')
+    parser.add_argument('--ann_root', type=str, default='data/annotations')
+    parser.add_argument('--checkpoint_path', type=str, default='checkpoints')
     args = parser.parse_args()
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Data fields
-    image_field = ImageDetectionsField(detections_path='path/to/detections')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Fields
+    image_field = ImageDetectionsField(detections_path=args.img_root, max_detections=50, load_in_tmp=False)
     question_field = TextField(init_token='<bos>', eos_token='<eos>', lower=True, tokenize='spacy')
     answer_field = TextField(init_token='<bos>', eos_token='<eos>', lower=True, tokenize='spacy')
 
-    # Dataset and Dataloader
-    dataset = COCO_VQA(image_field, question_field, answer_field, 'path/to/annotations', 'path/to/images')
-    dataloader_train, dataloader_val = DataLoader(dataset, batch_size=32, shuffle=True), DataLoader(dataset, batch_size=32)
+    # Dataset
+    train_dataset = OpenViVQA(image_field, question_field, answer_field, args.img_root, args.ann_root)
+    val_dataset = OpenViVQA(image_field, question_field, answer_field, args.img_root, args.ann_root)
+    test_dataset = OpenViVQA(image_field, question_field, answer_field, args.img_root, args.ann_root)
+
+    # Dataloader
+    dataloader_train = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
+    dataloader_val = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    dataloader_test = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
     # Model
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory, attention_module_kwargs={'m': 40})
-    decoder = MeshedDecoder(len(answer_field.vocab), 54, 3)
-    model = Transformer(image_field.vocab_size, encoder, decoder).to(device)
+    decoder = MeshedDecoder(len(answer_field.vocab), 54, 3, attention_module=ScaledDotProductAttentionMemory, attention_module_kwargs={'m': 40})
+    model = Transformer(encoder, decoder).to(device)
 
-    # Loss and Optimizer
+    # Loss and optimizer
     loss_fn = CrossEntropyLoss()
     optimizer = Adam(model.parameters(), lr=0.0001)
     scheduler = LambdaLR(optimizer, lambda epoch: 0.95 ** epoch)
@@ -145,7 +138,7 @@ if __name__ == '__main__':
 
                 pbar.set_postfix(scst_loss=scst_loss / (it + 1))
                 pbar.update()
-        
+
         val_loss = evaluate_loss(model, dataloader_val, loss_fn, answer_field)
         accuracy = evaluate_metrics(model, dataloader_val, answer_field)
         scheduler.step()
